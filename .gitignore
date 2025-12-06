@@ -1,0 +1,4 @@
+bumboo-scraper/.env
+.venv/
+sample-ui/
+bumboo-scraper/data/raw/*
