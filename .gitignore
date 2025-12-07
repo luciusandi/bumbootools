@@ -2,3 +2,5 @@ bumboo-scraper/.env
 .venv/
 sample-ui/
 bumboo-scraper/data/raw/*
+bumboo-ui/.next/*
+bumboo-ui/node_modules/*

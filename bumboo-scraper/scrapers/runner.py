@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from .models import ProductRecord, ScrapeJob
 from .registry import get_job, list_jobs
 from .storage import LocalJSONStorage, SupabaseStorage
+# normalize_records may be dynamically imported at runtime to avoid module path issues
 
 logger = logging.getLogger("scraper-runner")
 
@@ -65,20 +66,44 @@ def persist_records(
     if not records:
         logger.info("No records to persist")
         return
+    # Import normalizer lazily so module resolution works when running as a module
+    try:
+        from .normalizer import normalize_records  # type: ignore
+    except Exception:
+        try:
+            import normalizer as _normalizer  # type: ignore
+
+            normalize_records = _normalizer.normalize_records  # type: ignore
+        except Exception:
+            logger.warning("Normalizer not available; skipping normalization")
+            def normalize_records(x):
+                return list(x), []
+
+    # Normalize records first; write unmatched to a separate file for manual review
+    matched, unmatched = normalize_records(records)
+    if unmatched:
+        output_path_unmatched = LocalJSONStorage().dump_with_prefix(unmatched, prefix="unmatched")
+        logger.info("Wrote %d unmatched record(s) to %s", len(unmatched), output_path_unmatched)
 
     stored = False
-    if not skip_supabase:
+    if matched and not skip_supabase:
         try:
-            SupabaseStorage(table_name=table).upsert(records)
+            SupabaseStorage(table_name=table).upsert(matched)
         except RuntimeError as exc:
             logger.warning("Supabase disabled (%s); falling back to local dump", exc)
         else:
             stored = True
-            logger.info("Persisted %d record(s) to Supabase table '%s'", len(records), table)
+            logger.info("Persisted %d normalized record(s) to Supabase table '%s'", len(matched), table)
 
+    # Always write a local dump if requested or Supabase not used for matched records.
     if force_local_dump or not stored:
-        output_path = LocalJSONStorage().dump(records)
-        logger.info("Wrote JSON copy to %s", output_path)
+        # write matched set (normalized) for auditing
+        if matched:
+            output_path = LocalJSONStorage().dump_with_prefix(matched, prefix="scrape")
+            logger.info("Wrote JSON copy to %s", output_path)
+        elif unmatched and not matched:
+            # nothing matched and user wanted a local dump; unmatched already written
+            logger.info("No matched records to dump; unmatched records available")
 
 
 def main(argv: list[str] | None = None) -> None:

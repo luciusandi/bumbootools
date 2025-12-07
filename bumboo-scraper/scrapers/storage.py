@@ -57,3 +57,15 @@ class LocalJSONStorage:
         )
         return output_path
 
+    def dump_with_prefix(self, records: Iterable[ProductRecord], prefix: str = "scrape") -> Path:
+        """Dump records to data/raw/{prefix}_{timestamp}.json"""
+        serialized = []
+        for record in records:
+            data = asdict(record)
+            data["collected_at"] = record.collected_at.isoformat()
+            serialized.append(data)
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        output_path = self.base_path / f"{prefix}_{timestamp}.json"
+        output_path.write_text(json.dumps(serialized, indent=2), encoding="utf-8")
+        return output_path
+

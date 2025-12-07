@@ -1,0 +1,100 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Bumboo Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+      body { font-family: system-ui, Arial; margin: 24px; }
+      .controls { margin-bottom: 12px; }
+      table { border-collapse: collapse; width: 100%; margin-top: 12px;}
+      th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+      th { background: #f4f4f4; }
+    </style>
+  </head>
+  <body>
+    <h1>Bumboo Dashboard</h1>
+    <div class="controls">
+      <label>User: <input id="user" /></label>
+      <label>Pass: <input id="pass" type="password" /></label>
+      <label>Days: <input id="days" value="30" type="number" min="1" max="365" /></label>
+      <button id="load">Load Products</button>
+    </div>
+    <div id="status"></div>
+
+    <h2>Products (aggregated)</h2>
+    <table id="products">
+      <thead><tr><th>Brand</th><th>Description</th><th>Site</th><th>Count</th><th>Avg</th><th>Min</th><th>Max</th><th>Action</th></tr></thead>
+      <tbody></tbody>
+    </table>
+
+    <h2>Price History</h2>
+    <canvas id="chart" height="120"></canvas>
+    <div id="stats"></div>
+
+    <script>
+      const auth = () => {
+        const u = document.getElementById("user").value;
+        const p = document.getElementById("pass").value;
+        return 'Basic ' + btoa(u + ':' + p);
+      };
+
+      document.getElementById("load").addEventListener("click", async () => {
+        const days = document.getElementById("days").value || 30;
+        const hdr = { Authorization: auth() };
+        document.getElementById("status").textContent = "Loading products…";
+        const res = await fetch(`/api/products?days=${days}`, { headers: hdr });
+        if (!res.ok) { document.getElementById("status").textContent = 'Error: ' + res.statusText; return; }
+        const data = await res.json();
+        const tbody = document.querySelector("#products tbody");
+        tbody.innerHTML = "";
+        data.forEach(p => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `<td>${p.brand}</td><td>${p.description}</td><td>${p.site}</td><td>${p.count}</td><td>${p.avg_price||''}</td><td>${p.min_price||''}</td><td>${p.max_price||''}</td><td><button data-brand="${p.brand}" data-desc="${encodeURIComponent(p.description)}" data-site="${p.site}">View</button></td>`;
+          tbody.appendChild(tr);
+        });
+        document.getElementById("status").textContent = `Loaded ${data.length} products`;
+      });
+
+      let chart = null;
+      document.querySelector("#products").addEventListener("click", async (e) => {
+        if (e.target.tagName !== "BUTTON") return;
+        const brand = e.target.dataset.brand;
+        const desc = decodeURIComponent(e.target.dataset.desc);
+        const site = e.target.dataset.site;
+        const days = document.getElementById("days").value || 30;
+        const hdr = { Authorization: auth() };
+        document.getElementById("status").textContent = `Loading history for ${brand} / ${desc}…`;
+        const url = `/api/price-history?brand=${encodeURIComponent(brand)}&description=${encodeURIComponent(desc)}&site=${encodeURIComponent(site)}&days=${days}`;
+        const res = await fetch(url, { headers: hdr });
+        if (!res.ok) { document.getElementById("status").textContent = 'Error: ' + res.statusText; return; }
+        const data = await res.json();
+        const labels = data.map(d => d.date);
+        const avg = data.map(d => d.avg_price);
+        const min = data.map(d => d.min_price);
+        const max = data.map(d => d.max_price);
+        document.getElementById("status").textContent = `Loaded history (${data.length} points)`;
+        if (chart) chart.destroy();
+        const ctx = document.getElementById("chart").getContext("2d");
+        chart = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels,
+            datasets: [
+              { label: 'Avg', data: avg, borderColor: 'blue', fill: false },
+              { label: 'Min', data: min, borderColor: 'green', fill: false },
+              { label: 'Max', data: max, borderColor: 'red', fill: false },
+            ]
+          },
+        });
+        // compute stats
+        const vals = avg.filter(v=>v!=null);
+        const highest = Math.max(...vals);
+        const lowest = Math.min(...vals);
+        const avgVal = vals.reduce((a,b)=>a+b,0)/vals.length || null;
+        document.getElementById("stats").innerHTML = `<b>Stats (avg of daily avg)</b> Highest: ${highest} &nbsp; Avg: ${avgVal?.toFixed(2)||''} &nbsp; Lowest: ${lowest}`;
+      });
+    </script>
+  </body>
+</html>
+
