@@ -25,6 +25,10 @@ class ColdStorageCategoryScraper(BaseScraper):
     SIZE_TOKEN_PATTERN = re.compile(r"\b\d+[^\s]*", re.IGNORECASE)
 
     def _scrape(self) -> list[ProductRecord]:
+        detail_page = self.job.options.get("dataset_detail_url")
+        if detail_page:
+            return self._scrape_detail_page(detail_page)
+
         url = self.job.options["url"]
         response = self.fetch(url, verify=False)
         soup = BeautifulSoup(response.text, "html.parser")
@@ -47,8 +51,8 @@ class ColdStorageCategoryScraper(BaseScraper):
                 brand=self.job.brand,
                 description=name,
                 site=self.job.site_name,
-                size=self._extract_size(name),
-                ply=self._extract_ply(name),
+                size=self.job.options.get("size") or self._extract_size(name),
+                ply=self.job.options.get("ply") or self._extract_ply(name),
                 price=price,
                 total_reviews=None,
                 total_rating=None,
@@ -57,6 +61,38 @@ class ColdStorageCategoryScraper(BaseScraper):
             )
             records.append(record)
         return records
+
+    def _scrape_detail_page(self, url: str) -> list[ProductRecord]:
+        response = self.fetch(url, verify=False)
+        soup = BeautifulSoup(response.text, "html.parser")
+        info = soup.select_one(".info-content")
+        if not info:
+            return []
+        title_node = info.select_one(".title")
+        price_line = info.select_one(".price-line")
+        if not title_node or not price_line:
+            return []
+        name = title_node.get_text(strip=True)
+        price_val = self._parse_price_line(price_line)
+        metadata: dict[str, Any] = {
+            "job_description": self.job.description,
+            "dataset_detail_url": url,
+            "original_description": name,
+        }
+        record_description = self.job.options.get("dataset_description") or name
+        record = ProductRecord(
+            brand=self.job.brand,
+            description=record_description,
+            site=self.job.site_name,
+            size=self.job.options.get("size") or self._extract_size(name),
+            ply=self.job.options.get("ply") or self._extract_ply(name),
+            price=price_val,
+            total_reviews=None,
+            total_rating=None,
+            source_url=url,
+            metadata=metadata,
+        )
+        return [record]
 
     def _text(self, node) -> str:
         return node.get_text(strip=True) if node else ""
@@ -118,4 +154,22 @@ class ColdStorageCategoryScraper(BaseScraper):
         if head.endswith("ply"):
             return True
         return False
+
+    def _parse_price_line(self, node) -> float | None:
+        integer = node.select_one(".price")
+        decimal = node.select_one(".price-small")
+        if not integer:
+            return None
+        whole = self._sanitize_number(integer) or ""
+        frac = self._sanitize_number(decimal, allow_empty=True) or ""
+        if frac:
+            frac = frac.lstrip(".")
+        if not whole and not frac:
+            return None
+        denom = frac.ljust(2, "0") if frac else "00"
+        value = whole or "0"
+        try:
+            return float(f"{value}.{denom}")
+        except ValueError:
+            return None
 

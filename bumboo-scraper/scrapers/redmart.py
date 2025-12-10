@@ -29,27 +29,86 @@ class RedMartBrandScraper(BaseScraper):
     ]
 
     def _scrape(self) -> list[ProductRecord]:
-        url = self.job.options["api_url"]
+        # Support either a listing/api_url or a single product page 'url'
+        api_url = self.job.options.get("api_url")
+        product_page = self.job.options.get("url")
         records: list[ProductRecord] = []
-        seen_ids: set[str] = set()
 
-        while url:
-            response = self.fetch(url, headers=self._headers(), verify=False)
-            payload = response.json()
-            items = self._extract_items(payload)
-            if not items:
-                break
+        if api_url:
+            url = api_url
+            seen_ids: set[str] = set()
+            while url:
+                response = self.fetch(url, headers=self._headers(), verify=False)
+                payload = response.json()
+                items = self._extract_items(payload)
+                if not items:
+                    break
 
-            for item in items:
-                nid = item.get("nid") or item.get("itemId")
-                if not nid or nid in seen_ids:
-                    continue
-                seen_ids.add(nid)
-                records.append(self._to_record(item))
+                for item in items:
+                    nid = item.get("nid") or item.get("itemId")
+                    if not nid or nid in seen_ids:
+                        continue
+                    seen_ids.add(nid)
+                    records.append(self._to_record(item))
 
-            url = self._next_url(payload)
+                url = self._next_url(payload)
+            return self._filter_by_dataset(records)
 
-        return records
+        if product_page:
+            try:
+                response = self.fetch(product_page, headers=self._headers(), verify=False)
+                html = response.text
+                price = None
+                rating = None
+                reviews = None
+
+                tracking = self._extract_tracking_data(html)
+                if tracking:
+                    price = self._parse_price_value(tracking.get("pdt_price"))
+                    rating = rating or self._coerce_float(tracking.get("ratingValue"))
+                    reviews = reviews or self._coerce_int(tracking.get("reviewCount"))
+
+                parsed_rating, parsed_reviews = self._parse_rating_from_html(html)
+                rating = rating or parsed_rating
+                reviews = reviews or parsed_reviews
+
+                metadata = {
+                    "job_description": self.job.description,
+                    "source_note": "product-page-fallback",
+                    "tracking_data": tracking,
+                }
+                return [
+                    ProductRecord(
+                        brand=self.job.brand,
+                        description=self.job.description or (tracking and tracking.get("pdt_name") or ""),
+                        site=self.job.site_name,
+                        size=self.job.options.get("size"),
+                        ply=self.job.options.get("ply"),
+                        price=price,
+                        total_reviews=reviews,
+                        total_rating=rating,
+                        source_url=product_page,
+                        metadata=metadata,
+                    )
+                ]
+            except Exception:
+                metadata = {"job_description": self.job.description, "source_note": "product-page-fallback"}
+                return [
+                    ProductRecord(
+                        brand=self.job.brand,
+                        description=self.job.description or "",
+                        site=self.job.site_name,
+                        size=self.job.options.get("size"),
+                        ply=self.job.options.get("ply"),
+                        price=None,
+                        total_reviews=None,
+                        total_rating=None,
+                        source_url=product_page,
+                        metadata=metadata,
+                    )
+                ]
+
+        raise KeyError("Neither 'api_url' nor 'url' provided for RedMart scraper options")
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -100,14 +159,15 @@ class RedMartBrandScraper(BaseScraper):
             "badges": item.get("icons"),
             "categories": item.get("categories"),
             "package_info": item.get("packageInfo"),
+            "original_description": name,
         }
 
         return ProductRecord(
             brand=self.job.brand,
             description=name,
             site=self.job.site_name,
-            size=self._extract_size(item),
-            ply=self._extract_ply(name),
+            size=self.job.options.get("size") or self._extract_size(item),
+            ply=self.job.options.get("ply") or self._extract_ply(name),
             price=price,
             total_reviews=reviews,
             total_rating=rating,
@@ -170,3 +230,110 @@ class RedMartBrandScraper(BaseScraper):
         except (TypeError, ValueError):
             return None
 
+    def _coerce_float(self, value: Any) -> float | None:
+        if value is None:
+            return None
+        try:
+            s = str(value).strip()
+            if not s:
+                return None
+            return float(s)
+        except (TypeError, ValueError):
+            return None
+
+    def _coerce_int(self, value: Any) -> int | None:
+        if value is None:
+            return None
+        try:
+            s = str(value).strip()
+            if not s:
+                return None
+            return int(float(s))
+        except (TypeError, ValueError):
+            return None
+
+    def _parse_price_value(self, value: str | None) -> float | None:
+        if not value:
+            return None
+        cleaned = re.sub(r"[^\d\.]", "", value)
+        if not cleaned:
+            return None
+        try:
+            return float(cleaned)
+        except Exception:
+            return None
+
+    def _extract_tracking_data(self, html: str) -> dict[str, Any] | None:
+        match = re.search(
+            r'var\s+pdpTrackingData\s*=\s*"(?P<payload>(?:\\.|[^"])*)";',
+            html,
+            re.S,
+        )
+        if not match:
+            return None
+        payload = match.group("payload")
+        try:
+            decoded = json.loads(f'"{payload}"')
+        except json.JSONDecodeError:
+            try:
+                decoded = payload.encode("utf-8").decode("unicode_escape")
+            except Exception:
+                decoded = payload
+        try:
+            return json.loads(decoded)
+        except Exception:
+            return None
+
+    def _parse_rating_from_html(self, html: str) -> tuple[float | None, int | None]:
+        rating = None
+        reviews = None
+        match = re.search(
+            r'"reviewRating"\s*:\s*\{[^}]*"ratingValue"\s*:\s*"([^"]+)"',
+            html,
+            re.S,
+        )
+        if match:
+            try:
+                rating = float(match.group(1))
+            except Exception:
+                rating = None
+        match = re.search(
+            r'"aggregateRating"\s*:\s*\{[^}]*"ratingValue"\s*:\s*"([^"]+)"[^}]*"reviewCount"\s*:\s*"([^"]+)"',
+            html,
+            re.S,
+        )
+        if match:
+            if rating is None:
+                try:
+                    rating = float(match.group(1))
+                except Exception:
+                    rating = None
+            try:
+                reviews = int(float(match.group(2)))
+            except Exception:
+                reviews = None
+        return rating, reviews
+
+    def _normalize_name(self, value: str | None) -> str | None:
+        if not value:
+            return None
+        cleaned = re.sub(r"[^\w]+", " ", value).strip().lower()
+        return cleaned
+
+    def _filter_by_dataset(self, records: list[ProductRecord]) -> list[ProductRecord]:
+        target = self._normalize_name(self.job.options.get("dataset_product_name"))
+        if not target:
+            return records
+        matched: list[ProductRecord] = []
+        for record in records:
+            normalized_desc = self._normalize_name(record.description)
+            if normalized_desc and target in normalized_desc:
+                original_desc = record.description
+                record.metadata["original_description"] = original_desc
+                desc_override = self.job.options.get("dataset_description")
+                if desc_override:
+                    record.description = desc_override
+                matched.append(record)
+        if matched:
+            return matched
+        return records

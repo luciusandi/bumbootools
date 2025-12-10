@@ -161,3 +161,8 @@ python -m scrapers.runner --jobs \
   redmart-tempo redmart-kleenex redmart-pursoft redmart-vinda \
   redmart-beautex redmart-paseo redmart-cloversoft redmart-nootrees \
   --local-dump --table tissue_prices
+
+
+cd /Users/lucius/www/bumboo/bumboo-scraper
+source /path/to/venv/bin/activate
+python scripts/run_dataset.py --log-level INFO --table tissue_prices

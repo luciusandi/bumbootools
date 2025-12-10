@@ -126,6 +126,26 @@ PRODUCT_CATALOG: dict[str, ProductConfig] = {
             )
         },
     ),
+    "fairprice-vinda": ProductConfig(
+        slug="fairprice-vinda",
+        brand="Vinda",
+        description="PaVindaseo assortment at FairPrice",
+        site_name="FairPrice",
+        url="https://www.fairprice.com.sg/category/bathroom-tissues?filter=brand%3Avinda",
+        extra_options={
+            "api_url": (
+                "https://website-api.omni.fairprice.com.sg/api/layout/category/v2?"
+                "algopers=prm-ppb-1%2Cprm-ep-1%2Ct-epds-1%2Ct-ppb-0%2Ct-ep-0&"
+                "category=bathroom-tissues&"
+                "experiments=ls_deltime-sortA%2CsearchVariant-B%2Cgv-A%2Cshelflife-B%2Cds-A%2Cls_comsl-B%2C"
+                "cartfiller-a%2Ccatnav-hide%2Ccatbubog-B%2Csbanner-A%2Ccount-b%2Ccam-a%2Cpromobanner-c%2C"
+                "algopers-b%2Cdlv_pref_mf-B%2Cdelivery_pref_ffs-C%2Cdelivery_pref_pfc-C%2Ccrtalc-B%2C"
+                "crt-v-wbble-A%2Czero_search_swimlane-A%2Csd-var-a%2CslotIncentive-eco%2Cosmos-on%2Cgsc-a%2C"
+                "camp-lbl-B%2Cpoa-entry-A&filter=brand%3Avinda&includeTagDetails=true&"
+                "orderType=DELIVERY&page={page}&url=bathroom-tissues"
+            )
+        },
+    ),
     "fairprice-pursoft": ProductConfig(
         slug="fairprice-pursoft",
         brand="Pursoft",
@@ -359,4 +379,93 @@ def get_product(slug: str) -> ProductConfig:
 
 def list_products() -> Iterable[ProductConfig]:
     return PRODUCT_CATALOG.values()
+
+import csv
+import re
+from pathlib import Path
+from typing import List
+
+
+def _default_dataset_path() -> Path:
+    # dataset.csv is expected at the package root (one level up from this file)
+    return Path(__file__).resolve().parents[1] / "dataset.csv"
+
+
+def _slugify(value: str) -> str:
+    value = (value or "").strip().lower()
+    value = re.sub(r"[^\w]+", "-", value)
+    value = re.sub(r"-{2,}", "-", value).strip("-")
+    return value or "unknown"
+
+
+def load_dataset_rows(path: str | None = None) -> List[dict]:
+    """
+    Parse `dataset.csv` and return raw rows as dictionaries.
+    Columns expected (case-insensitive): Brand, Desc, Pack Size, Ply, Rolls, Sheets,
+    Fairprice, Cold Storage, Redmart
+    """
+    dataset_path = Path(path) if path else _default_dataset_path()
+    rows: List[dict] = []
+    if not dataset_path.exists():
+        raise FileNotFoundError(f"Dataset not found at {dataset_path}")
+    with dataset_path.open(encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        for r in reader:
+            # normalize keys to simple names
+            normalized = {k.strip(): (v or "").strip() for k, v in r.items()}
+            rows.append(normalized)
+    return rows
+
+
+def load_dataset_products(path: str | None = None) -> List[ProductConfig]:
+    """
+    Convert parsed CSV rows into a list of `ProductConfig` instances, one per
+    (site,brand) pair when a URL is provided.
+    """
+    rows = load_dataset_rows(path)
+    products: List[ProductConfig] = []
+    for row in rows:
+        brand = row.get("Brand") or row.get("brand") or ""
+        description = row.get("Desc") or row.get("description") or ""
+        size = row.get("Pack Size") or None
+        ply = row.get("Ply") or None
+        extra_options = {}
+        if row.get("Rolls"):
+            extra_options["rolls"] = row.get("Rolls")
+        if row.get("Sheets"):
+            extra_options["sheets"] = row.get("Sheets")
+
+        # iterate known site columns
+        for col_name, site_name in (("Fairprice", "FairPrice"), ("Cold Storage", "Cold Storage"), ("Redmart", "RedMart")):
+            url = row.get(col_name) or ""
+            if not url or url.strip() in ("-", ""):
+                continue
+            site_slug = _slugify(site_name)
+            brand_slug = _slugify(brand)
+            slug = f"{site_slug}-{brand_slug}"
+            prod = ProductConfig(
+                slug=slug,
+                brand=brand,
+                description=description or f"{brand} assortment",
+                site_name=site_name,
+                url=url,
+                size=size or None,
+                ply=ply or None,
+                extra_options=extra_options.copy(),
+            )
+            products.append(prod)
+    return products
+
+
+if __name__ == "__main__":  # pragma: no cover - simple CLI
+    # Quick CLI to preview parsed rows for manual testing
+    import sys
+
+    try:
+        preview = load_dataset_products()
+    except Exception as exc:
+        print(f"Could not load dataset: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    for p in preview[:20]:
+        print(f"{p.slug}\t{p.site_name}\t{p.brand}\t{p.size}\t{p.ply}\t{p.url}")
 

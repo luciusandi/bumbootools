@@ -84,29 +84,14 @@ def _matches(rule: dict[str, str], record: ProductRecord) -> bool:
     return False
 
 
-def normalize_record(record: ProductRecord) -> ProductRecord | None:
-    for rule in NORMALIZATION_MAP:
-        if _matches(rule, record):
-            return replace(record, description=rule["description"], size=rule["size"])
-    # keyword fallbacks
-    rd = (record.description or "").lower()
-    rb = (record.brand or "").strip()
-    for kr in KEYWORD_RULES:
-        if rb.lower() == kr["brand"].lower():
-            if all(k in rd for k in kr["keywords"]):
-                return replace(record, description=kr["description"], size=kr["size"])
-    return None
+def normalize_record(record: ProductRecord) -> ProductRecord:
+    return record
 
 
 def normalize_records(records: Iterable[ProductRecord]) -> Tuple[List[ProductRecord], List[ProductRecord]]:
     matched: List[ProductRecord] = []
-    unmatched: List[ProductRecord] = []
     for r in records:
-        nr = normalize_record(r)
-        if nr:
-            matched.append(nr)
-        else:
-            unmatched.append(r)
-    return matched, unmatched
+        matched.append(r)
+    return matched, []
 
 
